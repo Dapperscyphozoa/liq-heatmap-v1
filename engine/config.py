@@ -81,9 +81,15 @@ ACTIVE_UNIVERSE    = [c for c in (PRIMARY_UNIVERSE + SECONDARY_UNIVERSE)
 # ─── STRATEGY PARAMS ─────────────────────────────────────────────────
 # REQUIRED: forks override. Put your tuned numbers here verbatim.
 STRATEGY_PARAMS = {
-    "timeframe":       os.environ.get("STRATEGY_TIMEFRAME", "1h"),
-    "candles_history": int(os.environ.get("CANDLES_HISTORY", "200")),
-    # ... fork adds its own keys here
+    "timeframe":          os.environ.get("STRATEGY_TIMEFRAME", "1h"),
+    "candles_history":    int(os.environ.get("CANDLES_HISTORY", "200")),
+    "cluster_lookback":   int(os.environ.get("STRATEGY_CLUSTER_LOOKBACK", "120")),
+    "pivot_lookback":     int(os.environ.get("STRATEGY_PIVOT_LOOKBACK", "5")),
+    "cluster_band_pct":   float(os.environ.get("STRATEGY_CLUSTER_BAND_PCT", "0.003")),
+    "min_cluster_pivots": int(os.environ.get("STRATEGY_MIN_CLUSTER_PIVOTS", "2")),
+    "sweep_threshold_pct":float(os.environ.get("STRATEGY_SWEEP_THRESHOLD_PCT", "0.002")),
+    "vol_spike_mult":     float(os.environ.get("STRATEGY_VOL_SPIKE_MULT", "1.4")),
+    "max_cluster_proximity_pct": float(os.environ.get("STRATEGY_MAX_CLUSTER_PROXIMITY_PCT", "0.020")),
 }
 
 # ─── TRADE PARAMS ────────────────────────────────────────────────────
