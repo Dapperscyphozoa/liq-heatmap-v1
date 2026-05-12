@@ -117,6 +117,20 @@ MAKER_ONLY_MODE       = os.environ.get("MAKER_ONLY_MODE", "0") == "1"
 #   "skip"    — skip the trade if net exposure already same direction
 NET_DEDUP_MODE        = os.environ.get("NET_DEDUP_MODE", "off")
 NET_DEDUP_THRESHOLD_USD = float(os.environ.get("NET_DEDUP_THRESHOLD_USD", "100"))
+# Macro confluence — multiply cell_size_mult by /macro_state confluence factor
+# for the (coin_class, direction) of this trade. BTC vs alt classification
+# uses ALT_COINS env list (default: all known alts).
+MACRO_CONFLUENCE_MODE  = os.environ.get("MACRO_CONFLUENCE_MODE", "off")   # off | apply | skip_disagree
+MACRO_DISAGREE_THRESHOLD = float(os.environ.get("MACRO_DISAGREE_THRESHOLD", "0.7"))
+# Ensemble voting — query /confluence/{coin}/{direction} before firing.
+# When N engines agree on same coin/direction in last window, boost size.
+ENSEMBLE_VOTING_MODE   = os.environ.get("ENSEMBLE_VOTING_MODE", "off")  # off | apply
+ENSEMBLE_WINDOW_MIN    = int(os.environ.get("ENSEMBLE_WINDOW_MIN", "60"))
+# Orderbook depth amplifier — scale cell_size_mult by L2 book/direction alignment
+#   off            — no check
+#   apply          — multiply by 0.7-1.2x depending on book direction
+#   skip_against   — hard-skip if book strongly opposes direction
+BOOK_AMPLIFIER_MODE    = os.environ.get("BOOK_AMPLIFIER_MODE", "off")
 
 # Macro confluence (walk-forward exposed missing macro context)
 # When enabled, trader queries PM /macro_state and scales cell_size_mult by
@@ -130,6 +144,14 @@ MACRO_MIN_CONFLUENCE = float(os.environ.get("MACRO_MIN_CONFLUENCE", "0.0"))
 # Cross-engine ensemble confluence — scale size when multiple engines agree
 ENSEMBLE_CONFLUENCE_ENABLED = os.environ.get("ENSEMBLE_CONFLUENCE_ENABLED", "0") == "1"
 ENSEMBLE_WINDOW_MIN = int(os.environ.get("ENSEMBLE_WINDOW_MIN", "60"))
+
+# L2 orderbook imbalance as confluence amplifier
+# When set, trader fetches L2 before entering and applies a size modifier:
+#   strong agreement (book lean matches trade direction): boost size
+#   strong disagreement (book lean opposed): reduce size or skip
+L2_IMBALANCE_ENABLED = os.environ.get("L2_IMBALANCE_ENABLED", "0") == "1"
+L2_IMBALANCE_RANGE_PCT = float(os.environ.get("L2_IMBALANCE_RANGE_PCT", "0.005"))
+L2_IMBALANCE_BLOCK_THRESHOLD = float(os.environ.get("L2_IMBALANCE_BLOCK_THRESHOLD", "-0.5"))
 MAKER_TP_ENABLED      = os.environ.get("MAKER_TP_ENABLED", "0") == "1"
 # HL builder code — if set, all orders route through this builder and we
 # collect 25-30% of taker fees as kickback (separate from maker rebate).

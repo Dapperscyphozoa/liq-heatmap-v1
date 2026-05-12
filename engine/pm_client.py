@@ -99,6 +99,15 @@ def fetch_macro_state() -> Optional[dict]:
     return r
 
 
+def fetch_book_imbalance(coin: str, levels: int = 10) -> Optional[dict]:
+    """L2 book imbalance from PM. Returns verdict bid_heavy/ask_heavy/balanced
+    plus depth_ratio and imbalance_pct. None on unreachable."""
+    r = _request("GET", f"/book/{coin}?levels={levels}")
+    if not r or r.get("_unreachable") or r.get("_http_error"):
+        return None
+    return r
+
+
 def fetch_confluence(coin: str, direction: str, window_min: int = 60) -> Optional[dict]:
     """Cross-engine ensemble voting.
 
@@ -107,6 +116,30 @@ def fetch_confluence(coin: str, direction: str, window_min: int = 60) -> Optiona
 
     Used by trader.attempt_trade() to scale cell_size_mult — engines that
     fire alone get baseline size; engines firing in chorus get sized up.
+    """
+    r = _request("GET", f"/confluence/{coin}/{direction}?window_min={window_min}")
+    if not r or r.get("_unreachable") or r.get("_http_error"):
+        return None
+    return r
+
+
+def fetch_macro_state() -> Optional[dict]:
+    """Cross-asset macro regime + per-direction confluence multipliers.
+
+    Returns {regime_summary, confluence: {long_alt, short_alt, long_btc, short_btc}, ...}
+    None on PM unreachable — caller fails open (proceeds with multiplier 1.0).
+    """
+    r = _request("GET", "/macro_state")
+    if not r or r.get("_unreachable") or r.get("_http_error"):
+        return None
+    return r
+
+
+def fetch_confluence(coin: str, direction: str, window_min: int = 60) -> Optional[dict]:
+    """Cross-engine ensemble: how many other engines fired (coin, direction)
+    in the last window_min minutes?
+
+    Returns {n_engines_fired, engines: [...], confluence_mult: 1.0|1.3|1.6|2.0}
     """
     r = _request("GET", f"/confluence/{coin}/{direction}?window_min={window_min}")
     if not r or r.get("_unreachable") or r.get("_http_error"):

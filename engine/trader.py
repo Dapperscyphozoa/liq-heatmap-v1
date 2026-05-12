@@ -26,8 +26,11 @@ from .config import (
     HALT_STATE, ACTIVE_UNIVERSE, BLOCKED_UNIVERSE,
     TRADE_PARAMS, MAKER_ONLY_MODE, MAKER_TP_ENABLED, HL_BUILDER_CODE, BUILDER_KICKBACK_BPS,
     NET_DEDUP_MODE, NET_DEDUP_THRESHOLD_USD,
+    MACRO_CONFLUENCE_MODE, MACRO_DISAGREE_THRESHOLD,
+    ENSEMBLE_VOTING_MODE, ENSEMBLE_WINDOW_MIN, BOOK_AMPLIFIER_MODE,
     MACRO_CONFLUENCE_ENABLED, MACRO_BTC_COINS, MACRO_MIN_CONFLUENCE,
     ENSEMBLE_CONFLUENCE_ENABLED, ENSEMBLE_WINDOW_MIN,
+    L2_IMBALANCE_ENABLED, L2_IMBALANCE_RANGE_PCT, L2_IMBALANCE_BLOCK_THRESHOLD,
     HL_WALLET, HL_PRIVATE_KEY,
     LIVE_MIN_ACCOUNT_VALUE, LIVE_SIZE_SCALE, LIVE_EXIT_SLIPPAGE, LIVE_MAKER_ONLY_ENTRIES,
 )
@@ -240,6 +243,55 @@ def attempt_trade(coin: str, signal: dict) -> dict:
         except Exception as e:
             print(f"[ensemble] check failed: {e}", flush=True)
 
+    # ---------- orderbook imbalance amplifier ----------
+    # L2 book skew on top 10 price levels. Multiplies size if book agrees
+    # with trade direction, scales down if it disagrees.
+    if BOOK_AMPLIFIER_MODE != "off":
+        try:
+            book = pm_client.fetch_book_imbalance(coin)
+            if book:
+                verdict = book.get("verdict", "balanced")
+                direction = "long" if is_long else "short"
+                book_mult = 1.0
+                if verdict == "bid_heavy":
+                    book_mult = 1.2 if direction == "long" else 0.7
+                elif verdict == "ask_heavy":
+                    book_mult = 1.2 if direction == "short" else 0.7
+                if BOOK_AMPLIFIER_MODE == "skip_against" and book_mult < 0.8:
+                    return {"status": "skipped",
+                             "reason": f"book_against[{coin}:{direction}:{verdict}]"}
+                cell_size_mult = (cell_size_mult or 1.0) * book_mult
+                if book_mult != 1.0:
+                    print(f"[book] {coin}:{verdict} → {direction} x{book_mult}",
+                          flush=True)
+        except Exception as e:
+            print(f"[book] check failed: {e}", flush=True)
+
+    # ---------- L2 orderbook imbalance ----------
+    # Bid/ask depth within range_pct of mid. Lean matching trade direction
+    # = book agrees with the signal. Hard block on strong disagreement.
+    if L2_IMBALANCE_ENABLED:
+        try:
+            from . import hl_data as _hd_l2
+            book = _hd_l2.fetch_l2_book(coin)
+            imb = _hd_l2.compute_book_imbalance(book, L2_IMBALANCE_RANGE_PCT) if book else None
+            if imb is not None:
+                # For long: positive imbalance = bullish; for short: negative = bearish
+                aligned_imb = imb if is_long else -imb
+                if aligned_imb < L2_IMBALANCE_BLOCK_THRESHOLD:
+                    return {"status": "skipped",
+                             "reason": f"l2_imbalance_opposed[{aligned_imb:.2f}]"}
+                # Mild boost / reduction
+                if aligned_imb > 0.3:    l2_mult = 1.25
+                elif aligned_imb > 0.1:  l2_mult = 1.10
+                elif aligned_imb < -0.3: l2_mult = 0.65
+                elif aligned_imb < -0.1: l2_mult = 0.85
+                else:                     l2_mult = 1.00
+                cell_size_mult = (cell_size_mult or 1.0) * l2_mult
+                print(f"[l2] {coin}:{'L' if is_long else 'S'} imb={imb:+.2f} aligned={aligned_imb:+.2f} mult={l2_mult}", flush=True)
+        except Exception as e:
+            print(f"[l2] check failed: {e}", flush=True)
+
     # ---------- cross-engine portfolio netting ----------
     if NET_DEDUP_MODE != "off":
         try:
@@ -260,6 +312,75 @@ def attempt_trade(coin: str, signal: dict) -> dict:
                               f"(net ${net_ntl:.0f} already on)", flush=True)
         except Exception as e:
             print(f"[netdedup] check failed: {e}", flush=True)
+
+    # ---------- macro confluence ----------
+    # walk-forward audit showed engines fail across regimes because they have
+    # no macro sensor. Scale size by macro confluence multiplier:
+    #   btc_season  → long_alt 0.6x, short_alt 1.3x, long_btc 1.3x
+    #   alt_season  → long_alt 1.4x, short_alt 0.6x
+    #   risk_off    → long_alt 0.4x, short_alt 1.5x
+    # If MACRO_CONFLUENCE_MODE=skip_disagree, trades with multiplier <
+    # MACRO_DISAGREE_THRESHOLD are skipped entirely.
+    if MACRO_CONFLUENCE_MODE != "off":
+        try:
+            macro = pm_client.fetch_macro_state()
+            if macro:
+                conf = macro.get("confluence", {})
+                # Classify coin: BTC vs alt
+                coin_class = "btc" if coin == "BTC" else "alt"
+                direction = "long" if is_long else "short"
+                key = f"{direction}_{coin_class}"
+                macro_mult = float(conf.get(key, 1.0))
+                if MACRO_CONFLUENCE_MODE == "skip_disagree" and macro_mult < MACRO_DISAGREE_THRESHOLD:
+                    return {"status": "skipped",
+                             "reason": f"macro_disagree[{macro.get('regime_summary')}:{key}={macro_mult}]"}
+                cell_size_mult = (cell_size_mult or 1.0) * macro_mult
+                if macro_mult != 1.0:
+                    print(f"[macro] {macro.get('regime_summary')} → {key} = {macro_mult}x",
+                          flush=True)
+        except Exception as e:
+            print(f"[macro] check failed: {e}", flush=True)
+
+    # ---------- cross-engine ensemble voting ----------
+    # When 2+ engines independently fire the same (coin, direction) in the
+    # last hour, size up. This captures cross-strategy confluence.
+    if ENSEMBLE_VOTING_MODE != "off":
+        try:
+            direction = "long" if is_long else "short"
+            ens = pm_client.fetch_confluence(coin, direction, ENSEMBLE_WINDOW_MIN)
+            if ens:
+                ens_mult = float(ens.get("confluence_mult", 1.0))
+                n_eng = ens.get("n_engines_fired", 0)
+                cell_size_mult = (cell_size_mult or 1.0) * ens_mult
+                if n_eng > 1:
+                    print(f"[ensemble] {coin}:{direction} = {n_eng} engines agreed "
+                          f"→ {ens_mult}x", flush=True)
+        except Exception as e:
+            print(f"[ensemble] check failed: {e}", flush=True)
+
+    # ---------- orderbook imbalance amplifier ----------
+    # L2 book skew on top 10 price levels. Multiplies size if book agrees
+    # with trade direction, scales down if it disagrees.
+    if BOOK_AMPLIFIER_MODE != "off":
+        try:
+            book = pm_client.fetch_book_imbalance(coin)
+            if book:
+                verdict = book.get("verdict", "balanced")
+                direction = "long" if is_long else "short"
+                book_mult = 1.0
+                if verdict == "bid_heavy":
+                    book_mult = 1.2 if direction == "long" else 0.7
+                elif verdict == "ask_heavy":
+                    book_mult = 1.2 if direction == "short" else 0.7
+                if BOOK_AMPLIFIER_MODE == "skip_against" and book_mult < 0.8:
+                    return {"status": "skipped",
+                             "reason": f"book_against[{coin}:{direction}:{verdict}]"}
+                cell_size_mult = (cell_size_mult or 1.0) * book_mult
+                if book_mult != 1.0:
+                    print(f"[book] {coin}:{verdict} → {direction} x{book_mult}",
+                          flush=True)
+        except Exception as e:
+            print(f"[book] check failed: {e}", flush=True)
     # NB: ACTIVE_UNIVERSE check removed — scan loop already filters via
     # _get_active_universe() (dynamic full HL universe minus blacklist + BLOCKED).
     # The static config ACTIVE_UNIVERSE is now stale when USE_FULL_UNIVERSE=1.
