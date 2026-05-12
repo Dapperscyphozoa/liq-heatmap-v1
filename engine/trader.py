@@ -26,6 +26,7 @@ from .config import (
     HALT_STATE, ACTIVE_UNIVERSE, BLOCKED_UNIVERSE,
     TRADE_PARAMS, MAKER_ONLY_MODE, MAKER_TP_ENABLED, HL_BUILDER_CODE, BUILDER_KICKBACK_BPS,
     NET_DEDUP_MODE, NET_DEDUP_THRESHOLD_USD,
+    MACRO_CONFLUENCE_ENABLED, MACRO_BTC_COINS, MACRO_MIN_CONFLUENCE,
     HL_WALLET, HL_PRIVATE_KEY,
     LIVE_MIN_ACCOUNT_VALUE, LIVE_SIZE_SCALE, LIVE_EXIT_SLIPPAGE, LIVE_MAKER_ONLY_ENTRIES,
 )
@@ -184,6 +185,43 @@ def attempt_trade(coin: str, signal: dict) -> dict:
                      "reason": f"cell_gated[{coin}:{cell_regime_label}:{cell_direction}]:{cell_reason}"}
     except Exception as e:
         print(f"[cell] gate error: {e}", flush=True)
+
+    # ---------- volatility regime overlay ----------
+    # Quiet vol → size up. Noisy vol → size down. Optional BLOCKED_VOL_REGIMES env
+    # can flat-out skip trades in disagreeing vol regimes.
+    try:
+        from . import hl_data as _hd_v
+        from .config import STRATEGY_PARAMS as _sp_v
+        _tf_v = _sp_v.get("timeframe", "1h")
+        _vdf = _hd_v.fetch_candles(coin, _tf_v, n_bars=200)
+        vol_label = regime_module.classify_vol_regime(_vdf) if _vdf is not None else None
+        if regime_module.is_vol_blocked(vol_label):
+            return {"status": "skipped",
+                     "reason": f"blocked_vol_regime[{vol_label}]"}
+        vol_mult = regime_module.compute_vol_size_modifier(vol_label)
+        cell_size_mult = (cell_size_mult or 1.0) * vol_mult
+    except Exception as e:
+        print(f"[vol_regime] check failed: {e}", flush=True)
+
+    # ---------- macro confluence ----------
+    # Walk-forward audit revealed engines need macro context. Pull macro state
+    # from PM and scale size by (coin_class, direction) confluence multiplier.
+    if MACRO_CONFLUENCE_ENABLED:
+        try:
+            macro = pm_client.fetch_macro_state()
+            if macro and macro.get("confluence"):
+                coin_class = "btc" if coin in MACRO_BTC_COINS else "alt"
+                dir_str = "long" if is_long else "short"
+                key = f"{dir_str}_{coin_class}"
+                macro_mult = float(macro["confluence"].get(key, 1.0))
+                if macro_mult < MACRO_MIN_CONFLUENCE:
+                    return {"status": "skipped",
+                             "reason": f"macro_blocked[{macro['regime_summary']}:{key}={macro_mult:.2f}]"}
+                cell_size_mult = (cell_size_mult or 1.0) * macro_mult
+                print(f"[macro] {coin}({coin_class}) {dir_str}: regime={macro['regime_summary']} "
+                      f"mult={macro_mult:.2f}", flush=True)
+        except Exception as e:
+            print(f"[macro] check failed: {e}", flush=True)
 
     # ---------- cross-engine portfolio netting ----------
     if NET_DEDUP_MODE != "off":

@@ -85,6 +85,20 @@ def get_regime(coin: str) -> Optional[dict]:
     return r
 
 
+def fetch_macro_state() -> Optional[dict]:
+    """Cross-asset macro regime sensor.
+
+    Returns macro state with per-(coin_class, direction) confluence multipliers.
+    Used by trader.attempt_trade() to scale cell_size_mult by macro alignment.
+
+    Returns None on PM unreachable — fail-open (proceed with 1.0× multiplier).
+    """
+    r = _request("GET", "/macro_state")
+    if not r or r.get("_unreachable") or r.get("_http_error"):
+        return None
+    return r
+
+
 def fetch_net_position(coin: str) -> Optional[dict]:
     """Cross-engine portfolio netting helper.
 

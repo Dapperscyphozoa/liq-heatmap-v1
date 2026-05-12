@@ -117,6 +117,15 @@ MAKER_ONLY_MODE       = os.environ.get("MAKER_ONLY_MODE", "0") == "1"
 #   "skip"    — skip the trade if net exposure already same direction
 NET_DEDUP_MODE        = os.environ.get("NET_DEDUP_MODE", "off")
 NET_DEDUP_THRESHOLD_USD = float(os.environ.get("NET_DEDUP_THRESHOLD_USD", "100"))
+
+# Macro confluence (walk-forward exposed missing macro context)
+# When enabled, trader queries PM /macro_state and scales cell_size_mult by
+# the confluence multiplier matching (coin_class, direction).
+MACRO_CONFLUENCE_ENABLED = os.environ.get("MACRO_CONFLUENCE_ENABLED", "0") == "1"
+# Classify coins as 'btc' or 'alt' for confluence lookup.
+MACRO_BTC_COINS = set([c for c in os.environ.get("MACRO_BTC_COINS", "BTC").split(",") if c])
+# Optional kill switch: skip trades when macro confluence < threshold
+MACRO_MIN_CONFLUENCE = float(os.environ.get("MACRO_MIN_CONFLUENCE", "0.0"))
 MAKER_TP_ENABLED      = os.environ.get("MAKER_TP_ENABLED", "0") == "1"
 # HL builder code — if set, all orders route through this builder and we
 # collect 25-30% of taker fees as kickback (separate from maker rebate).
