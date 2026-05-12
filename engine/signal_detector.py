@@ -36,13 +36,13 @@ def _cluster(prices: List[float], band: float, min_n: int) -> List[Tuple[float, 
     return sorted(out, key=lambda x: -x[1])
 
 
-def evaluate_latest_bar(df: pd.DataFrame) -> Optional[dict]:
+def _evaluate_with_thresholds(df: pd.DataFrame, min_pivots: int, vol_mult: float) -> Optional[dict]:
     LB = STRATEGY_PARAMS.get("cluster_lookback", 120)
     PIV = STRATEGY_PARAMS.get("pivot_lookback", 5)
     BAND = STRATEGY_PARAMS.get("cluster_band_pct", 0.003)
-    MIN = STRATEGY_PARAMS.get("min_cluster_pivots", 3)
+    MIN = min_pivots
     SWEEP = STRATEGY_PARAMS.get("sweep_threshold_pct", 0.002)
-    VSPIKE = STRATEGY_PARAMS.get("vol_spike_mult", 1.8)
+    VSPIKE = vol_mult
     PROX = STRATEGY_PARAMS.get("max_cluster_proximity_pct", 0.020)
 
     if df is None or len(df) < LB + 20: return None
@@ -122,3 +122,39 @@ def evaluate_latest_bar(df: pd.DataFrame) -> Optional[dict]:
         "pool_members": int(n_mem), "vol_spike": float(vspike),
         "body_ratio": float(body_ratio),
     }
+
+
+def evaluate_latest_bar(df) -> Optional[dict]:
+    """Tiered conviction scanner.
+
+    Tries strict threshold first (full size). If no fire, retries with weak
+    threshold (quarter size). Returns a signal dict augmented with
+    `conviction` and `size_multiplier` fields.
+
+    Strict / weak thresholds come from STRATEGY_PARAMS:
+      strict: min_cluster_pivots, vol_spike_mult            (defaults: 3, 1.8)
+      weak:   min_cluster_pivots_weak, vol_spike_mult_weak  (defaults: 2, 1.3)
+    """
+    # Strict tier: full conviction, full size
+    strict_min = STRATEGY_PARAMS.get("min_cluster_pivots", 3)
+    strict_vol = STRATEGY_PARAMS.get("vol_spike_mult", 1.8)
+    sig = _evaluate_with_thresholds(df, strict_min, strict_vol)
+    if sig is not None:
+        sig["conviction"] = "strong"
+        sig["size_multiplier"] = 1.0
+        sig["fire_reason"] = f"{sig.get('fire_reason','')}_STRONG"
+        return sig
+
+    # Weak tier: lower conviction, quarter size
+    weak_min = STRATEGY_PARAMS.get("min_cluster_pivots_weak", 2)
+    weak_vol = STRATEGY_PARAMS.get("vol_spike_mult_weak", 1.3)
+    if weak_min >= strict_min and weak_vol >= strict_vol:
+        return None   # weak is not actually weaker than strict — skip
+    sig = _evaluate_with_thresholds(df, weak_min, weak_vol)
+    if sig is not None:
+        sig["conviction"] = "weak"
+        sig["size_multiplier"] = 0.25
+        sig["fire_reason"] = f"{sig.get('fire_reason','')}_WEAK"
+        return sig
+
+    return None
