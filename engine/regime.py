@@ -86,3 +86,59 @@ def is_blocked(label: Optional[str]) -> bool:
     if label is None:
         return False   # don't block when classifier insufficient (e.g. early bars)
     return label in BLOCKED_REGIMES
+
+
+
+# ──────────────── VOLATILITY REGIME OVERLAY ───────────────────
+# Separate from price regime. ATR percentile reveals where vol is in its own
+# distribution. Fixed ATR multipliers on SL/TP are wrong in both extremes:
+#   - quiet vol  (<30 pct): SL too wide → R:R degrades, fewer fills
+#   - noisy vol  (>70 pct): SL too tight → stop-hunts, higher loss rate
+#
+# Engines can opt-in via BLOCKED_VOL_REGIMES env (e.g. "quiet,noisy").
+
+BLOCKED_VOL_REGIMES = [r for r in os.environ.get("BLOCKED_VOL_REGIMES", "").split(",") if r]
+
+
+def classify_vol_regime(df: "pd.DataFrame", lookback: int = 168) -> Optional[str]:
+    """Per-bar volatility regime, anchored to last `lookback` bars.
+
+    Labels:
+      'quiet'   : ATR < 30th percentile of lookback window
+      'normal'  : 30th-70th percentile
+      'noisy'   : > 70th percentile
+    """
+    if df is None or len(df) < lookback + 14:
+        return None
+    h = df["high"].values
+    l = df["low"].values
+    c = df["close"].values
+    prev_c = pd.Series(c).shift(1).values
+    tr = np.maximum.reduce([
+        h - l,
+        np.abs(h - prev_c),
+        np.abs(l - prev_c),
+    ])
+    # ATR is rolling-14 mean of TR
+    atr_series = pd.Series(tr).rolling(14).mean().dropna()
+    if len(atr_series) < lookback:
+        return None
+    window = atr_series.iloc[-lookback:]
+    current_atr = float(window.iloc[-1])
+    p30 = float(window.quantile(0.30))
+    p70 = float(window.quantile(0.70))
+    if current_atr < p30: return "quiet"
+    if current_atr > p70: return "noisy"
+    return "normal"
+
+
+def is_vol_blocked(label: Optional[str]) -> bool:
+    if label is None: return False
+    return label in BLOCKED_VOL_REGIMES
+
+
+def compute_vol_size_modifier(label: Optional[str]) -> float:
+    """Position-size multiplier from vol regime.
+       Quiet vol = larger size (cheaper to be wrong, slippage low)
+       Noisy vol = smaller size (real risk of stop hunts)"""
+    return {"quiet": 1.20, "normal": 1.00, "noisy": 0.75}.get(label or "normal", 1.00)
