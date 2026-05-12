@@ -99,6 +99,21 @@ def fetch_macro_state() -> Optional[dict]:
     return r
 
 
+def fetch_confluence(coin: str, direction: str, window_min: int = 60) -> Optional[dict]:
+    """Cross-engine ensemble voting.
+
+    Returns how many engines independently fired the same (coin, direction)
+    within window_min minutes. Higher count = stronger structural signal.
+
+    Used by trader.attempt_trade() to scale cell_size_mult — engines that
+    fire alone get baseline size; engines firing in chorus get sized up.
+    """
+    r = _request("GET", f"/confluence/{coin}/{direction}?window_min={window_min}")
+    if not r or r.get("_unreachable") or r.get("_http_error"):
+        return None
+    return r
+
+
 def fetch_net_position(coin: str) -> Optional[dict]:
     """Cross-engine portfolio netting helper.
 

@@ -126,6 +126,10 @@ MACRO_CONFLUENCE_ENABLED = os.environ.get("MACRO_CONFLUENCE_ENABLED", "0") == "1
 MACRO_BTC_COINS = set([c for c in os.environ.get("MACRO_BTC_COINS", "BTC").split(",") if c])
 # Optional kill switch: skip trades when macro confluence < threshold
 MACRO_MIN_CONFLUENCE = float(os.environ.get("MACRO_MIN_CONFLUENCE", "0.0"))
+
+# Cross-engine ensemble confluence — scale size when multiple engines agree
+ENSEMBLE_CONFLUENCE_ENABLED = os.environ.get("ENSEMBLE_CONFLUENCE_ENABLED", "0") == "1"
+ENSEMBLE_WINDOW_MIN = int(os.environ.get("ENSEMBLE_WINDOW_MIN", "60"))
 MAKER_TP_ENABLED      = os.environ.get("MAKER_TP_ENABLED", "0") == "1"
 # HL builder code — if set, all orders route through this builder and we
 # collect 25-30% of taker fees as kickback (separate from maker rebate).

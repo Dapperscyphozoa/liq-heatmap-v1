@@ -21,12 +21,13 @@ from . import pm_client
 from . import cell_manager
 from .config import (
     PAPER_MODE, LIVE_TRADING, DRY_RUN, USE_TESTNET, CLOID_PREFIX,
-    FIXED_NOTIONAL_USD,
+    FIXED_NOTIONAL_USD, ENGINE_NAME,
     LEVERAGE, MAX_NOTIONAL_PER_TRADE, MAX_OPEN_POSITIONS, RISK_PCT_PER_TRADE,
     HALT_STATE, ACTIVE_UNIVERSE, BLOCKED_UNIVERSE,
     TRADE_PARAMS, MAKER_ONLY_MODE, MAKER_TP_ENABLED, HL_BUILDER_CODE, BUILDER_KICKBACK_BPS,
     NET_DEDUP_MODE, NET_DEDUP_THRESHOLD_USD,
     MACRO_CONFLUENCE_ENABLED, MACRO_BTC_COINS, MACRO_MIN_CONFLUENCE,
+    ENSEMBLE_CONFLUENCE_ENABLED, ENSEMBLE_WINDOW_MIN,
     HL_WALLET, HL_PRIVATE_KEY,
     LIVE_MIN_ACCOUNT_VALUE, LIVE_SIZE_SCALE, LIVE_EXIT_SLIPPAGE, LIVE_MAKER_ONLY_ENTRIES,
 )
@@ -222,6 +223,22 @@ def attempt_trade(coin: str, signal: dict) -> dict:
                       f"mult={macro_mult:.2f}", flush=True)
         except Exception as e:
             print(f"[macro] check failed: {e}", flush=True)
+
+    # ---------- cross-engine ensemble voting ----------
+    # Poll PM /confluence to learn whether other engines fired same (coin,dir)
+    # within window_min. If multiple engines agree, multiply size by confluence factor.
+    if ENSEMBLE_CONFLUENCE_ENABLED:
+        try:
+            dir_str = "long" if is_long else "short"
+            conf = pm_client.fetch_confluence(coin, dir_str, ENSEMBLE_WINDOW_MIN)
+            if conf and conf.get("n_engines_fired", 0) >= 2:
+                ens_mult = float(conf.get("confluence_mult", 1.0))
+                cell_size_mult = (cell_size_mult or 1.0) * ens_mult
+                others = [e["engine"] for e in conf.get("engines", []) if e["engine"] != ENGINE_NAME]
+                print(f"[ensemble] {coin}:{dir_str} confluence x{ens_mult} "
+                      f"(also: {','.join(others[:3])})", flush=True)
+        except Exception as e:
+            print(f"[ensemble] check failed: {e}", flush=True)
 
     # ---------- cross-engine portfolio netting ----------
     if NET_DEDUP_MODE != "off":
