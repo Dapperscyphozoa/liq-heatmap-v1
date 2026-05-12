@@ -133,3 +133,49 @@ def fetch_meta() -> Optional[dict]:
 def fetch_mids() -> Optional[dict]:
     """Get current mid prices for all coins."""
     return _post({"type": "allMids"})
+
+
+
+def fetch_l2_book(coin: str) -> Optional[dict]:
+    """Fetch L2 orderbook from HL. Returns {"bids":[...], "asks":[...]} or None."""
+    try:
+        body = json.dumps({"type": "l2Book", "coin": coin}).encode()
+        req = urllib.request.Request(_HL_INFO_URL, data=body,
+                                       headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            data = json.loads(r.read())
+            # Returns: {"coin":..., "time":..., "levels":[[bids],[asks]]}
+            levels = data.get("levels", [])
+            if len(levels) < 2: return None
+            return {
+                "bids": [{"px": float(b["px"]), "sz": float(b["sz"])} for b in levels[0]],
+                "asks": [{"px": float(a["px"]), "sz": float(a["sz"])} for a in levels[1]],
+                "ts": data.get("time"),
+            }
+    except Exception as e:
+        return None
+
+
+def compute_book_imbalance(book: dict, range_pct: float = 0.005) -> Optional[float]:
+    """Compute bid/ask depth ratio within `range_pct` of mid.
+
+    Returns:
+       imbalance = (bid_depth - ask_depth) / (bid_depth + ask_depth)
+       > 0  : more bids than asks (bullish lean — support nearby)
+       < 0  : more asks than bids (bearish lean — resistance nearby)
+       0    : balanced
+
+    Returns None if book is empty or sparse.
+    """
+    if not book or not book.get("bids") or not book.get("asks"):
+        return None
+    best_bid = book["bids"][0]["px"]
+    best_ask = book["asks"][0]["px"]
+    mid = (best_bid + best_ask) / 2
+    band_lo = mid * (1 - range_pct)
+    band_hi = mid * (1 + range_pct)
+    bid_depth = sum(b["sz"] for b in book["bids"] if b["px"] >= band_lo)
+    ask_depth = sum(a["sz"] for a in book["asks"] if a["px"] <= band_hi)
+    total = bid_depth + ask_depth
+    if total <= 0: return None
+    return (bid_depth - ask_depth) / total
