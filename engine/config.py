@@ -86,6 +86,19 @@ STRATEGY_PARAMS = {
     # ... fork adds its own keys here
 }
 
+# Override any STRATEGY_PARAMS key via env (JSON dict): allows tuning forks
+# without code changes. Example:
+#   STRATEGY_PARAMS_OVERRIDES='{"mesh_min_anchors": 3, "approach_max_pct": 0.015}'
+import json as _json_cfg
+_overrides_raw = os.environ.get("STRATEGY_PARAMS_OVERRIDES", "").strip()
+if _overrides_raw:
+    try:
+        _overrides = _json_cfg.loads(_overrides_raw)
+        STRATEGY_PARAMS.update(_overrides)
+        print(f"[config] STRATEGY_PARAMS overrides applied: {list(_overrides.keys())}", flush=True)
+    except Exception as _e:
+        print(f"[config] STRATEGY_PARAMS_OVERRIDES parse failed: {_e}", flush=True)
+
 # ─── TRADE PARAMS ────────────────────────────────────────────────────
 TRADE_PARAMS = {
     "sl_atr_mult":    float(os.environ.get("SL_ATR_MULT", "2.0")),
