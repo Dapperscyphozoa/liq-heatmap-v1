@@ -16,6 +16,20 @@ import hashlib
 import logging
 import threading
 from typing import Optional, Tuple, Dict, Any
+import os
+
+# HL builder code support — if set, all orders route through this builder
+# and we collect builder_fee_tenths_bps / 10 bps per fill as kickback.
+# f is in tenths of a bp: f=1 = 0.01bp, f=10 = 0.1bp, f=100 = 1bp
+HL_BUILDER_ADDRESS = os.environ.get("HL_BUILDER_ADDRESS", "").lower().strip()
+HL_BUILDER_FEE_TENTHS_BPS = int(os.environ.get("HL_BUILDER_FEE_TENTHS_BPS", "10"))   # 0.1bp default
+
+
+def _builder_info() -> Optional[Dict[str, Any]]:
+    """Return BuilderInfo dict if HL_BUILDER_ADDRESS configured, else None."""
+    if not HL_BUILDER_ADDRESS or not HL_BUILDER_ADDRESS.startswith("0x"):
+        return None
+    return {"b": HL_BUILDER_ADDRESS, "f": HL_BUILDER_FEE_TENTHS_BPS}
 
 logger = logging.getLogger(__name__)
 
@@ -258,6 +272,7 @@ class HLClient:
                 coin, is_buy, size, limit_px, order_type,
                 reduce_only=reduce_only,
                 cloid=cloid_obj,
+                builder=_builder_info(),
             )
             return self._parse_order_response(result, exch_cloid_str)
         except Exception as e:
@@ -292,10 +307,12 @@ class HLClient:
                 # market_close handles reduce-only flag automatically
                 result = self.exchange.market_close(
                     coin, sz=size, slippage=slippage, cloid=cloid_obj,
+                    builder=_builder_info(),
                 )
             else:
                 result = self.exchange.market_open(
                     coin, is_buy, size, px=None, slippage=slippage, cloid=cloid_obj,
+                    builder=_builder_info(),
                 )
             return self._parse_order_response(result, exch_cloid_str)
         except Exception as e:
@@ -313,6 +330,7 @@ class HLClient:
             # market_close with sz=None closes whole position
             result = self.exchange.market_close(
                 coin, sz=None, slippage=slippage, cloid=cloid_obj,
+                builder=_builder_info(),
             )
             return self._parse_order_response(result, exch_cloid_str)
         except Exception as e:
