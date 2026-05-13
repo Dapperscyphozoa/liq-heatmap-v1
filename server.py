@@ -10,6 +10,7 @@ import json
 import os
 import time
 import traceback
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -42,6 +43,19 @@ def _origin_for_request(handler) -> str:
     return ""
 
 
+# ===== Daemon thread crash visibility =====
+# Default threading.Thread silently swallows exceptions in daemon threads.
+# This excepthook prints them so we see scan_loop / position_loop crashes.
+def _thread_excepthook(args):
+    print(f"[thread crash] {args.thread.name}: {args.exc_type.__name__}: {args.exc_value}",
+          flush=True)
+    if args.exc_traceback:
+        traceback.print_exception(args.exc_type, args.exc_value, args.exc_traceback)
+        sys.stdout.flush()
+
+threading.excepthook = _thread_excepthook
+
+
 # ===== Background workers =====
 def scan_loop():
     """Every SCAN_INTERVAL_SEC: pull candles for each coin, detect signals, attempt trades."""
@@ -58,6 +72,11 @@ def scan_loop():
                 _scan_once()
         except Exception as e:
             print(f"[scan] loop error: {e}\n{traceback.format_exc()}", flush=True)
+        except BaseException as e:
+            # Catches SystemExit, KeyboardInterrupt, MemoryError, etc.
+            # Logs + re-raises so process can crash cleanly with visible reason.
+            print(f"[scan] FATAL {type(e).__name__}: {e}\n{traceback.format_exc()}", flush=True)
+            raise
         time.sleep(SCAN_INTERVAL_SEC)
 
 
@@ -103,8 +122,8 @@ def _scan_once():
         except Exception as e:
             print(f"[scan] error for {coin}: {e}", flush=True)
 
-    if n_signals > 0:
-        print(f"[scan] cycle done: {n_signals} signals, {n_trades} trades, {n_skipped} skipped", flush=True)
+    # Always print cycle done (heartbeat — needed to detect silent scan loop death)
+    print(f"[scan] cycle done: {n_signals} signals, {n_trades} trades, {n_skipped} skipped", flush=True)
 
 
 def position_loop():
