@@ -116,23 +116,68 @@ class HLClient:
             logger.error(f"HLClient init failed deriving address from key: {e}")
             return
 
-        if actual != self.expected_wallet:
-            self.armed = False
-            self.exchange = None
-            self.info = None
-            self.actual_wallet = actual
-            logger.error(
-                f"HLClient WALLET MISMATCH: expected={self.expected_wallet} "
-                f"derived={actual}. Refusing to arm."
-            )
-            return
-
         api_url = constants.TESTNET_API_URL if testnet else constants.MAINNET_API_URL
-        self.exchange = Exchange(account, api_url, account_address=actual)
-        self.info = Info(api_url, skip_ws=True)
-        self.actual_wallet = actual
-        self.armed = True
-        logger.info(f"HLClient armed: wallet={actual} api={api_url}")
+
+        if actual != self.expected_wallet:
+            # 2026-05-13: API-wallet (extraAgent) pattern. The signing key
+            # may be an authorized agent for the master wallet. Validate that
+            # `actual` is in the master's extraAgents list, then route trades
+            # to the master via account_address.
+            try:
+                import urllib.request as _ureq
+                import json as _json
+                _body = _json.dumps({"type": "extraAgents", "user": self.expected_wallet}).encode()
+                _req = _ureq.Request(
+                    api_url + "/info", data=_body,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with _ureq.urlopen(_req, timeout=10) as _r:
+                    agents = _json.loads(_r.read().decode()) or []
+            except Exception as e:
+                self.armed = False
+                self.exchange = None
+                self.info = None
+                self.actual_wallet = actual
+                logger.error(
+                    f"HLClient WALLET MISMATCH: expected={self.expected_wallet} "
+                    f"derived={actual}; agent-check failed ({e}). Refusing to arm."
+                )
+                return
+
+            import time as _time
+            now_ms = int(_time.time() * 1000)
+            authorized = any(
+                isinstance(a, dict)
+                and (a.get("address") or "").lower() == actual
+                and (a.get("validUntil") or 0) > now_ms
+                for a in (agents if isinstance(agents, list) else [])
+            )
+            if not authorized:
+                self.armed = False
+                self.exchange = None
+                self.info = None
+                self.actual_wallet = actual
+                logger.error(
+                    f"HLClient WALLET MISMATCH: expected={self.expected_wallet} "
+                    f"derived={actual}; not registered as extraAgent. Refusing to arm."
+                )
+                return
+
+            self.exchange = Exchange(account, api_url, account_address=self.expected_wallet)
+            self.info = Info(api_url, skip_ws=True)
+            self.actual_wallet = actual
+            self.armed = True
+            logger.info(
+                f"HLClient armed (API-wallet pattern): "
+                f"signer={actual} master={self.expected_wallet} api={api_url}"
+            )
+        else:
+            self.exchange = Exchange(account, api_url, account_address=actual)
+            self.info = Info(api_url, skip_ws=True)
+            self.actual_wallet = actual
+            self.armed = True
+            logger.info(f"HLClient armed: wallet={actual} api={api_url}")
 
         # Pre-fetch meta to populate sz_decimals
         try:
