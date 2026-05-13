@@ -123,25 +123,46 @@ class HLClient:
             # may be an authorized agent for the master wallet. Validate that
             # `actual` is in the master's extraAgents list, then route trades
             # to the master via account_address.
-            try:
-                import urllib.request as _ureq
-                import json as _json
-                _body = _json.dumps({"type": "extraAgents", "user": self.expected_wallet}).encode()
-                _req = _ureq.Request(
-                    api_url + "/info", data=_body,
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                with _ureq.urlopen(_req, timeout=10) as _r:
-                    agents = _json.loads(_r.read().decode()) or []
-            except Exception as e:
+            # Retry with exponential backoff: 429 on extraAgents endpoint is common
+            # right after deploy when many engines boot together.
+            import urllib.request as _ureq
+            import urllib.error as _uerr
+            import json as _json
+            import time as _t
+            agents = None
+            last_err = None
+            for _attempt in range(6):
+                try:
+                    _body = _json.dumps({"type": "extraAgents", "user": self.expected_wallet}).encode()
+                    _req = _ureq.Request(
+                        api_url + "/info", data=_body,
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    with _ureq.urlopen(_req, timeout=10) as _r:
+                        agents = _json.loads(_r.read().decode()) or []
+                    break
+                except _uerr.HTTPError as e:
+                    last_err = e
+                    if e.code == 429:
+                        wait_s = min(60.0, (2 ** _attempt) + 1.0)
+                        logger.warning(f"HLClient agent-check 429 attempt {_attempt+1}/6 — backoff {wait_s:.1f}s")
+                        _t.sleep(wait_s)
+                        continue
+                    else:
+                        break
+                except Exception as e:
+                    last_err = e
+                    _t.sleep(2 ** _attempt)
+                    continue
+            if agents is None:
                 self.armed = False
                 self.exchange = None
                 self.info = None
                 self.actual_wallet = actual
                 logger.error(
                     f"HLClient WALLET MISMATCH: expected={self.expected_wallet} "
-                    f"derived={actual}; agent-check failed ({e}). Refusing to arm."
+                    f"derived={actual}; agent-check failed after retries ({last_err}). Refusing to arm."
                 )
                 return
 
