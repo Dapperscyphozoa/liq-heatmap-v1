@@ -68,8 +68,17 @@ def to_exchange_cloid(internal_cloid: str) -> str:
     Deterministic: same internal → same on-chain. Reverse lookup is done by
     re-hashing all candidate internal cloids and matching the result.
     """
-    h = hashlib.sha256(internal_cloid.encode()).hexdigest()
-    return "0x" + h[:32]
+    # 2026-05-13 ATTRIBUTION-EMBED: first 5-7 bytes = CLOID_PREFIX ASCII so PM
+    # attribution.head-decode lifts the engine name from the on-chain cloid.
+    try:
+        from .config import CLOID_PREFIX as _PREFIX
+    except Exception:
+        _PREFIX = ""
+    prefix_bytes = _PREFIX.encode('ascii')[:7]
+    h = hashlib.sha256(internal_cloid.encode()).digest()
+    remaining = 16 - len(prefix_bytes)
+    combined = prefix_bytes + h[:remaining]
+    return "0x" + combined.hex()
 
 
 def reverse_cloid_lookup(exchange_cloid: str, candidate_internals: list[str]) -> Optional[str]:
