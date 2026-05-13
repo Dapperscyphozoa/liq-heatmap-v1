@@ -360,6 +360,38 @@ class Handler(BaseHTTPRequestHandler):
                 # Manual trigger
                 threading.Thread(target=_scan_once, daemon=True).start()
                 _json(self, 200, {"status": "scan_triggered"})
+            elif u.path == "/admin/wipe_history":
+                # FULL data wipe of signals + trades + closures.
+                if HALT_TOKEN:
+                    provided = self.headers.get("X-Halt-Token", "").strip()
+                    import hmac as _hmac
+                    if not provided or not _hmac.compare_digest(provided, HALT_TOKEN):
+                        _json(self, 401, {"error": "unauthorized"})
+                        return
+                keep_open = bool(data.get("keep_open", True))
+                results = {}
+                try:
+                    with persistence.conn() as c:
+                        for table in ("signals","trades","closures"):
+                            try:
+                                before = c.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                                if table == "trades" and keep_open:
+                                    c.execute("DELETE FROM trades WHERE status != 'open'")
+                                else:
+                                    c.execute(f"DELETE FROM {table}")
+                                after = c.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                                results[table] = {"before": before, "after": after, "deleted": before-after}
+                            except Exception as _te:
+                                results[table] = {"error": str(_te)}
+                        try: c.execute("VACUUM")
+                        except: pass
+                        c.commit()
+                    print(f"[admin/wipe_history] {results}", flush=True)
+                    _json(self, 200, {"ok": True, "results": results, "keep_open": keep_open})
+                except Exception as e:
+                    _json(self, 500, {"error": str(e)})
+                return
+
             elif u.path == "/wipe_all_open":
                 # Reconciliation: mark ALL open trades (paper + live) as wiped.
                 # Used when wallet has 0 open positions but DB tracks phantoms.
