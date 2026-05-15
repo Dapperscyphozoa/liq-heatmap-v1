@@ -154,7 +154,7 @@ def attempt_trade(coin: str, signal: dict) -> dict:
             print(f"[regime] classifier error for {coin}: {e}", flush=True)
 
     # ---------- session filter ----------
-    from .config import SESSION_HOURS, ATR_PCT_MIN, ATR_PCT_MAX
+    from .config import ATR_PCT_MIN, ATR_PCT_MAX
     if SESSION_HOURS:
         from datetime import datetime, timezone
         hour_utc = datetime.now(timezone.utc).hour
