@@ -36,6 +36,9 @@ def _cluster(prices: List[float], band: float, min_n: int) -> List[Tuple[float, 
     return sorted(out, key=lambda x: -x[1])
 
 
+import os as _lh1_os
+_LH1_INVERTED = _lh1_os.environ.get("LH1_INVERTED", "0") == "1"
+
 def _evaluate_with_thresholds(df: pd.DataFrame, min_pivots: int, vol_mult: float) -> Optional[dict]:
     LB = STRATEGY_PARAMS.get("cluster_lookback", 120)
     PIV = STRATEGY_PARAMS.get("pivot_lookback", 5)
@@ -93,6 +96,18 @@ def _evaluate_with_thresholds(df: pd.DataFrame, min_pivots: int, vol_mult: float
 
     if is_long is None: return None
     pool_px, n_mem, pool_type = fired_pool
+
+    # LH1 inversion test (2026-05-16): backtest OOS PF was 0.84/0.83 train/test
+    # on the fade direction. Test the continuation direction by inverting.
+    # Enable via env LH1_INVERTED=1.
+    # Note: SL/TP block below uses swept_lo for LONG and swept_hi for SHORT.
+    # Those are tied to the SWEPT zone (the wick), not the direction. On inversion
+    # we swap them so SL still sits on the swept-zone side. Also swap pools used
+    # for TP search (bsl <-> ssl) since the targets flip too.
+    if _LH1_INVERTED:
+        is_long = not is_long
+        swept_lo, swept_hi = swept_hi, swept_lo
+        bsl, ssl = ssl, bsl
 
     if is_long:
         sl_p = swept_lo * (1 - 0.003)
